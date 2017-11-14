@@ -1,4 +1,5 @@
 const Botkit = require('botkit');
+const maraton = require('./integrations/daniadnia.pl');
 
 const controller = Botkit.sparkbot({
     debug: true,
@@ -16,24 +17,85 @@ const controller = Botkit.sparkbot({
 const bot = controller.spawn({
 });
 
-const getFirstMatch = (string, regex) => {
-    const result = string.match(regex);
-    return result && result.length && result[1] || undefined;
-};
+controller.setupWebserver(process.env.PORT || 3000, (err, webserver) => {
+    controller.createWebhookEndpoints(webserver, bot, () => {
+        console.log("SPARK: Webhooks set up!");
+    });
+});
 
-const parsePrice = text =>
-    Number.parseFloat(text.split(' ')
-        .shift()
-        .replace(',', '.'));
+controller.hears('menu', 'direct_message,direct_mention', async (bot, message) => {
+    const menu = await maraton.getMenu();
+    bot.reply(message, {markdown: getMenuMarkdown(menu)});
+});
 
-const getMatches = (text, regex) => {
-    const matches = [];
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-        matches.push(match[0]);
+controller.hears('add (.*)', 'direct_message,direct_mention', async (bot, message) => {
+    const userOrderProducts = getUserOrderProducts(message.user);
+    const request = message.match[1];
+    const menu = await maraton.getMenu();
+    const newSelectedProductIndexes = request
+        .replace(',', ' ')
+        .split(' ')
+        .filter(product => product.includes('.'))
+        .map(product => getProductMenuIndex(product));
+
+    const newSelectedProducts = newSelectedProductIndexes.map(([categoryIndex, productIndex]) => {
+        const category = menu[categoryIndex];
+        const products = category && category.products;
+        return products && products[productIndex];
+    });
+
+    let responseText = 'Hi ' + getUserMentionMarkup(message) + ', ';
+
+    if (!newSelectedProducts.length) {
+        responseText = responseText + 'I have not updated your order because I could not find any of the things you requested.';
+    } else if (newSelectedProducts.includes(undefined)) {
+        responseText = responseText + 'I have not updated your order because I could not find some of the things you requested.';
+    } else {
+        responseText = responseText + 'I have updated your order.';
+        userOrderProducts.push(...newSelectedProductIndexes);
     }
-    return matches;
-};
+    if (userOrderProducts.length > 0) {
+        const selectedProducts = userOrderProducts.map(([categoryIndex, productIndex]) => {
+            const category = menu[categoryIndex];
+            const products = category && category.products;
+            return products && products[productIndex];
+        });
+        responseText = responseText + ' \n\n ' + 'Your order currently has: \n ' + selectedProducts
+            .map(product => '- ' + product.name)
+            .join('\n')
+    }
+
+    bot.reply(message, {markdown: responseText});
+});
+
+controller.on(['direct_mention', 'direct_message'], (bot, message) => {
+    bot.reply(message, 'Hi ' + getUserMentionMarkup(message) + ', currently I understand only a few simple commands: "menu, "add [number,..]"');
+});
+
+let currentOrder;
+
+const getUserMentionMarkup = message => `<@personId:${message.actorId}|${getUserName(message)}>`
+
+const getUserOrderProducts = user => {
+    if (!currentOrder) {
+        currentOrder = {};
+    }
+    if (!currentOrder[user]) {
+        currentOrder[user] = [];
+    }
+    return currentOrder[user];
+}
+
+const getUserName = message =>
+    message.user.split('@')
+        .shift()
+        .split('.')
+        .shift();
+
+const getProductMenuIndex = text =>
+    text.trim()
+        .split('.')
+        .map(text => parseInt(text, 10) - 1);
 
 const getMenuMarkdown = menuData =>
     menuData.map((category, categoryIndex) => {
@@ -45,35 +107,3 @@ const getMenuMarkdown = menuData =>
         return `#${category.title}\n` + '___\n' + productsText;
     })
     .join('\n\n');
-
-controller.setupWebserver(process.env.PORT || 3000, (err, webserver) => {
-    controller.createWebhookEndpoints(webserver, bot, () => {
-        console.log("SPARK: Webhooks set up!");
-    });
-});
-
-controller.hears('hello', 'direct_message,direct_mention', (bot, message) => {
-    const name = message.user.split('@')
-        .shift()
-        .split('.')
-        .shift();
-
-    bot.reply(message, 'Hi, ' + name);
-});
-
-controller.hears('menu', 'direct_message,direct_mention', (bot, message) => {
-    console.log('getting menu...')
-    getMaratonMenu()
-        .then(menuData => {
-            console.log('got the menu data')
-            bot.reply(message, {markdown: getMenuMarkdown(menuData)});
-        });
-});
-
-controller.on('direct_mention', (bot, message) => {
-    bot.reply(message, 'You mentioned me and said, "' + message.text + '"');
-});
-
-controller.on('direct_message', (bot, message) => {
-    bot.reply(message, 'I got your private message. You said, "' + message.text + '"');
-});
