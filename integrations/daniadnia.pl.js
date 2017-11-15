@@ -41,10 +41,11 @@ const fetchRawMenuData = async () => {
 const getMenuData = async () => {
     const menuText = await fetchRawMenuData();
     const categories = getMatches(menuText, /<section class="meals".*?>([\s\S]*?)<\/section>/g);
-    const data = categories.map(category => ({
+    const data = categories.map((category, categoryIndex) => ({
         title: getFirstMatch(category, /<h3.*?<\/i>\s(.*?)<\/h3>/),
         products: getMatches(category, /<tr(.*?)id="meal-details".*?>([\s\S]*?)<\/tr>/g)
-            .map(product => ({
+            .map((product, productIndex) => ({
+                categoryIndex, productIndex,
                 name: getFirstMatch(product, /<td class="meal-name".*?>(.*?)<\/td>/),
                 price: applyDiscount(parsePrice(getFirstMatch(product, /<td class="meal-price".*?>(.*?)<\/td>/)))
             }))
