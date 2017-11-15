@@ -43,7 +43,7 @@ controller.hears(['show(.*)order'], 'direct_message,direct_mention', async (bot,
 
             responseText = responseText + 'your order currently has: \n ' + selectedProducts
                 .map(getProductMarkdown)
-                .join(' \n ')
+                .join('\n')
 
             responseText = responseText + ' \n\n ' + 'Total is: **' +
                 selectedProducts.reduce((total, product) => {
@@ -51,45 +51,33 @@ controller.hears(['show(.*)order'], 'direct_message,direct_mention', async (bot,
                 }, 0).toFixed(2) + 'zł**';
 
         } else {
-            responseText = responseText + 'nothing has been added to your order yet';
+            responseText = responseText + 'your order is empty.';
         }
     } else {
-        const usersData = Object.keys(currentOrder)
-            .map(user => {
-                const userProducts = mapProductIndexes(menu, currentOrder[user]);
-                return {
-                    user,
-                    products: userProducts,
-                    total: userProducts.reduce((total, product) => total + product.price, 0)
-                };
-            });
+        const currentOrderData = getCurrentOrderData(currentOrder, menu);
+        if (currentOrderData.length > 0) {
+            const orderTotal = getCurrentOrderTotal(currentOrderData);
 
-        const orderTotal = usersData.reduce((total, userInfo) => total + userInfo.total, 0);
-
-        responseText = `#Current order details (${orderTotal.toFixed(2)}zł)\n ___\n `;
-        responseText = responseText + usersData.map(userInfo =>
-            `##${getUserName(userInfo.user)} (${userInfo.total.toFixed(2)}zł)\n ___\n ` +
-                userInfo.products
-                    .map(getProductMarkdown)
-                    .join(' \n ') +
-                ' \n ')
-            .join(' \n ');
+            responseText = `#Current order details (${orderTotal.toFixed(2)}zł)\n ___\n `;
+            responseText = responseText + currentOrderData.map(userInfo =>
+                `##${getUserName(userInfo.user)} (${userInfo.total.toFixed(2)}zł)\n ___\n ` +
+                    userInfo.products
+                        .map(getProductMarkdown)
+                        .join('\n') +
+                    '\n')
+                .join('\n\n');
+        } else {
+            responseText = 'The order is currently empty';
+        }
     }
-
     bot.reply(message, {markdown: responseText});
-
 });
 
 controller.hears('add (.*)', 'direct_message,direct_mention', async (bot, message) => {
     const userOrderProductsIndexes = getUserOrderProductsIndexes(message.user);
     const request = message.match[1];
     const menu = await maraton.getMenu();
-    const newSelectedProductIndexes = request
-        .replace(',', ' ')
-        .split(' ')
-        .filter(product => product.includes('.'))
-        .map(product => getProductMenuIndex(product));
-
+    const newSelectedProductIndexes = parseProductIndexes(request);
     const newSelectedProducts = mapProductIndexes(menu, newSelectedProductIndexes);
 
     let responseText = 'Hi ' + getUserMentionMarkdown(message) + ', ';
@@ -103,25 +91,54 @@ controller.hears('add (.*)', 'direct_message,direct_mention', async (bot, messag
         userOrderProductsIndexes.push(...newSelectedProductIndexes);
     }
     if (userOrderProductsIndexes.length > 0) {
-        const selectedProducts = mapProductIndexes(menu, userOrderProductsIndexes);
-
-        responseText = responseText + ' \n\n ' + 'Your order currently has: \n ' + selectedProducts
-            .map(getProductMarkdown)
-            .join('\n')
-
-        responseText = responseText + ' \n\n ' + 'Total is: **' +
-            selectedProducts.reduce((total, product) => {
-                return total + product.price;
-            }, 0).toFixed(2) + 'zł**';
-
+        responseText = responseText + '\n\n' + getUsersOrderMarkdown(mapProductIndexes(menu, userOrderProductsIndexes));
+    } else {
+        responseText = responseText + '\n\n' + 'Your order is empty.';
     }
+    bot.reply(message, {markdown: responseText});
+});
 
+controller.hears('remove (.*)', 'direct_message,direct_mention', async (bot, message) => {
+    const userOrderProductsIndexes = getUserOrderProductsIndexes(message.user);
+    const request = message.match[1];
+    const toRemoveProductIndexes = parseProductIndexes(request);
+    const newUserOrderProductsIndexes = userOrderProductsIndexes.filter(productIndex =>
+        !toRemoveProductIndexes.find(toRemoveIndex =>
+            toRemoveIndex.toString() === productIndex.toString()
+        )
+    );
+
+    let responseText = 'Hi ' + getUserMentionMarkdown(message) + ', ';
+
+    if (userOrderProductsIndexes.length - newUserOrderProductsIndexes.length !== toRemoveProductIndexes.length) {
+        responseText = responseText + 'I have not updated your order because I could not find in your order some of the things you requested to be removed.';
+    } else {
+        currentOrder[message.user] = newUserOrderProductsIndexes;
+        responseText = responseText + 'I have updated your order.';
+    }
+    if (newUserOrderProductsIndexes.length > 0) {
+        const menu = await maraton.getMenu();
+        responseText = responseText + '\n\n' + getUsersOrderMarkdown(mapProductIndexes(menu, newUserOrderProductsIndexes));
+    } else {
+        responseText = responseText + '\n\n' + 'Your order is empty.';
+    }
     bot.reply(message, {markdown: responseText});
 });
 
 controller.on(['direct_mention', 'direct_message'], (bot, message) => {
     bot.reply(message, 'Hi ' + getUserMentionMarkdown(message) + ', currently I understand only a few simple commands: "menu, "add [number,..]"');
 });
+
+const parseProductIndexes = text =>
+    text.replace(',', ' ')
+        .split(' ')
+        .filter(product => product.includes('.'))
+        .map(product => parseProductIndex(product));
+
+const parseProductIndex = text =>
+    text.trim()
+        .split('.')
+        .map(text => parseInt(text, 10) - 1);
 
 let currentOrder;
 
@@ -132,6 +149,25 @@ const mapProductIndexes = (menu, indexes) =>
         const product = products && products[productIndex];
         return products && products[productIndex];
     });
+
+const getCurrentOrderTotal = currentOrderData =>
+    currentOrderData.reduce((total, userInfo) => total + userInfo.total, 0);
+
+const getCurrentOrderData = (currentOrder, menu) => {
+    if (currentOrder) {
+        return Object.keys(currentOrder)
+            .filter(user => currentOrder[user] && currentOrder[user].length > 0)
+            .map(user => {
+                const userProducts = mapProductIndexes(menu, currentOrder[user]);
+                return {
+                    user,
+                    products: userProducts,
+                    total: userProducts.reduce((total, product) => total + product.price, 0)
+                };
+            });
+    }
+    return [];
+};
 
 const getUserOrderProductsIndexes = user => {
     if (!currentOrder) {
@@ -149,16 +185,23 @@ const getUserName = user =>
         .split('.')
         .shift();
 
-const getProductMenuIndex = text =>
-    text.trim()
-        .split('.')
-        .map(text => parseInt(text, 10) - 1);
-
 const getUserMentionMarkdown = message =>
     `<@personId:${message.actorId}|${getUserName(message.user)}>`;
 
 const getProductMarkdown = product =>
     `- [${product.categoryIndex + 1}.${product.productIndex + 1}] **${product.name}** ${product.description || ''} (${product.price} zł)`;
+
+const getUsersOrderMarkdown = userProducts =>
+    'Your order currently has: \n ' +
+        userProducts
+            .map(getProductMarkdown)
+            .join('\n') +
+        ' \n\n ' +
+        'Total is: **' +
+        userProducts
+            .reduce((total, product) => total + product.price, 0)
+            .toFixed(2) +
+        'zł**';
 
 const getMenuMarkdown = menuData =>
     menuData.map(category => {
